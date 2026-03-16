@@ -8,7 +8,7 @@ feeds:
     enabled: true          # Fetches malicious IPs from blocklist.de
   threatfox:
     enabled: false         # Requires API key – get one from threatfox.abuse.ch
-    api_key: "YOUR_API_KEY"
+    api_key: "YOUR_API_KEY_HERE"
     days: 1                # Fetch IOCs from last 1 day
 
 # Log sources
