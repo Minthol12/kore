@@ -535,10 +535,8 @@ def print_banner():
 ╠╩╗║ ║╚═╗ ║ 
 ╩ ╩╚═╝╚═╝ ╩ 
 [/bold red][bold green]Threat Intelligence Correlation Engine[/bold green]
-[bold yellow]v1.0 - Menu Edition[/bold yellow]
+[bold yellow]Menu Edition[/bold yellow]
 """
-    console.print(banner)
-    console.print("[cyan]Inspired by BLACKGLASS v11.0-APEX[/cyan]\n")
 
 def print_menu():
     menu_text = """
