@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 
 import aiohttp
-from requests
+import requests
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
