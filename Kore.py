@@ -1,10 +1,9 @@
+#!/usr/bin/env python3
 """
-Kore - Threat Intelligence Correlation Engine
+Kore - Interactive CLI Menu Version
+Threat Intelligence Correlation Engine
 
-A CLI tool that fetches IOCs from multiple threat feeds, parses log files,
-and correlates them to identify potential security incidents.
-
-Author: Phoenix/Minthol
+Inspired by BLACKGLASS v11.0-APEX menu style.
 """
 
 import asyncio
@@ -27,54 +26,51 @@ import requests
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.panel import Panel
+from rich.text import Text
+from rich import print as rprint
 
-# Setup Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Setup logging (quiet by default in interactive mode)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger('kore')
 
 # ========================== Data Classes ==========================
+# (Same as original Kore)
 @dataclass
 class Indicator:
-    """Represents a single indicator of compromise."""
     value: str
-    type: str  # 'ip', 'domain', 'hash', 'url'
+    type: str
     source: str
     first_seen: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     tags: List[str] = field(default_factory=list)
-    confidence: str = 'unknown'  # low, medium, high
+    confidence: str = 'unknown'
 
 @dataclass
 class LogEvent:
-    """Represents a parsed log entry with extracted indicators."""
     raw: str
     timestamp: Optional[datetime]
-    source: str  # file path
-    indicators: Dict[str, Set[str]] = field(default_factory=lambda: defaultdict(set))  # type -> set of values
+    source: str
+    indicators: Dict[str, Set[str]] = field(default_factory=lambda: defaultdict(set))
 
 @dataclass
 class Match:
-    """Represents a correlation match between an IOC and a log event."""
     indicator: Indicator
     event: LogEvent
     matched_value: str
     matched_type: str
 
 # ========================== Feed Fetchers ==========================
-
 class FeedFetcher:
-    """Base class for fetching IOCs from a threat feed."""
     def __init__(self, name: str, config: dict):
         self.name = name
         self.config = config
         self.indicators: List[Indicator] = []
 
     async def fetch(self, session: aiohttp.ClientSession) -> List[Indicator]:
-        """Fetch IOCs from the feed. To be overridden."""
         raise NotImplementedError
 
 class DShieldFeed(FeedFetcher):
-    """Fetches top attackers from DShield (https://feeds.dshield.org/block.txt)."""
     async def fetch(self, session: aiohttp.ClientSession) -> List[Indicator]:
         url = "https://feeds.dshield.org/block.txt"
         try:
@@ -91,7 +87,6 @@ class DShieldFeed(FeedFetcher):
                     parts = line.split()
                     if len(parts) >= 1:
                         ip = parts[0]
-                        # Validate IP
                         try:
                             ipaddress.ip_address(ip)
                         except ValueError:
@@ -103,14 +98,12 @@ class DShieldFeed(FeedFetcher):
                             tags=['attacker'],
                             confidence='medium'
                         ))
-                logger.info(f"DShield: fetched {len(indicators)} IPs")
                 return indicators
         except Exception as e:
             logger.error(f"DShield fetch error: {e}")
             return []
 
 class BlocklistDeFeed(FeedFetcher):
-    """Fetches IPs from blocklist.de (https://lists.blocklist.de/lists/all.txt)."""
     async def fetch(self, session: aiohttp.ClientSession) -> List[Indicator]:
         url = "https://lists.blocklist.de/lists/all.txt"
         try:
@@ -135,14 +128,12 @@ class BlocklistDeFeed(FeedFetcher):
                         ))
                     except ValueError:
                         continue
-                logger.info(f"blocklist.de: fetched {len(indicators)} IPs")
                 return indicators
         except Exception as e:
             logger.error(f"blocklist.de fetch error: {e}")
             return []
 
 class ThreatFoxFeed(FeedFetcher):
-    """Fetches recent IOCs from ThreatFox (requires API key)."""
     async def fetch(self, session: aiohttp.ClientSession) -> List[Indicator]:
         api_key = self.config.get('api_key')
         if not api_key:
@@ -168,8 +159,7 @@ class ThreatFoxFeed(FeedFetcher):
                     ioc_value = item.get('ioc')
                     ioc_type = item.get('ioc_type', '').lower()
                     if ioc_type == 'ip:port':
-                        ioc_type = 'ip'  # We'll extract IP later if needed, but for now treat as ip
-                        # Could split on colon to get IP
+                        ioc_type = 'ip'
                         if ':' in ioc_value:
                             ioc_value = ioc_value.split(':', 1)[0]
                     elif ioc_type == 'domain':
@@ -190,23 +180,19 @@ class ThreatFoxFeed(FeedFetcher):
                         type=ioc_type,
                         source=self.name,
                         tags=item.get('tags', []),
-                        confidence='high'  # ThreatFox is reputable
+                        confidence='high'
                     ))
-                logger.info(f"ThreatFox: fetched {len(indicators)} IOCs")
                 return indicators
         except Exception as e:
             logger.error(f"ThreatFox fetch error: {e}")
             return []
 
 # ========================== Log Parsers ==========================
-
 class LogParser:
-    """Base class for parsing log files."""
     def __init__(self, config: dict):
         self.config = config
 
     def parse_file(self, path: Path) -> List[LogEvent]:
-        """Parse a single log file and return list of events."""
         events = []
         try:
             with open(path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -219,31 +205,18 @@ class LogParser:
         return events
 
     def parse_line(self, line: str, source: Path) -> Optional[LogEvent]:
-        """Parse a single log line. To be overridden."""
         raise NotImplementedError
 
 class ApacheLogParser(LogParser):
-    """Parser for Apache access logs (Common/Combined format)."""
-    # Example: 192.168.1.1 - - [10/Mar/2025:12:00:00 +0000] "GET /index.html HTTP/1.1" 200 1234
-    # Regex to extract IP and possibly domain from Host header if present
-    # This is simplified; a full parser would be more complex.
     def parse_line(self, line: str, source: Path) -> Optional[LogEvent]:
-        # Simple extraction: find first IPv4 address
         ip_match = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', line)
         ips = set()
         if ip_match:
             ips.add(ip_match.group())
-
-        # Extract domains (very basic)
         domains = set(re.findall(r'\b([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b', line))
-
-        # Extract URLs (anything starting with http:// or https://)
         urls = set(re.findall(r'https?://[^\s"<>]+', line))
-
         if not (ips or domains or urls):
             return None
-
-        # Try to extract timestamp (naive)
         timestamp = None
         ts_match = re.search(r'\[(\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2})', line)
         if ts_match:
@@ -251,7 +224,6 @@ class ApacheLogParser(LogParser):
                 timestamp = datetime.strptime(ts_match.group(1), '%d/%b/%Y:%H:%M:%S')
             except ValueError:
                 pass
-
         event = LogEvent(raw=line, timestamp=timestamp, source=str(source))
         event.indicators['ip'].update(ips)
         event.indicators['domain'].update(domains)
@@ -259,20 +231,15 @@ class ApacheLogParser(LogParser):
         return event
 
 class JsonLogParser(LogParser):
-    """Parser for JSON logs (e.g., from Falco, Sysmon, etc.)."""
     def parse_line(self, line: str, source: Path) -> Optional[LogEvent]:
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
             return None
-
         event = LogEvent(raw=line, timestamp=None, source=str(source))
-
-        # Extract timestamp if present (common fields)
         ts = data.get('timestamp') or data.get('@timestamp') or data.get('time')
         if ts:
             try:
-                # Try common formats
                 if isinstance(ts, str):
                     if 'T' in ts:
                         event.timestamp = datetime.fromisoformat(ts.replace('Z', '+00:00'))
@@ -280,10 +247,7 @@ class JsonLogParser(LogParser):
                         event.timestamp = datetime.strptime(ts, '%Y-%m-%d %H:%M:%S')
             except:
                 pass
-
-        # Recursively search for IPs, domains, hashes in the JSON
         self._extract_from_dict(data, event.indicators)
-
         if any(event.indicators.values()):
             return event
         return None
@@ -297,33 +261,27 @@ class JsonLogParser(LogParser):
             for i, item in enumerate(obj):
                 self._extract_from_dict(item, indicators, f"{path}[{i}]")
         elif isinstance(obj, str):
-            # Check for IP
             try:
                 ipaddress.ip_address(obj)
                 indicators['ip'].add(obj)
             except ValueError:
                 pass
-            # Check for domain (simple)
             if re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', obj):
                 indicators['domain'].add(obj)
-            # Check for URL
             if obj.startswith(('http://', 'https://')):
                 indicators['url'].add(obj)
-            # Check for hash (MD5, SHA1, SHA256)
             if re.match(r'^[a-fA-F0-9]{32}$', obj):
-                indicators['hash'].add(obj)  # MD5
+                indicators['hash'].add(obj)
             elif re.match(r'^[a-fA-F0-9]{40}$', obj):
-                indicators['hash'].add(obj)  # SHA1
+                indicators['hash'].add(obj)
             elif re.match(r'^[a-fA-F0-9]{64}$', obj):
-                indicators['hash'].add(obj)  # SHA256
+                indicators['hash'].add(obj)
 
 class CsvLogParser(LogParser):
-    """Parser for CSV logs where columns are configurable."""
     def __init__(self, config: dict):
         super().__init__(config)
         self.delimiter = config.get('delimiter', ',')
         self.columns = config.get('columns', {})
-        # Expected format: columns: {ip: 'src_ip', domain: 'host', hash: 'file_hash', timestamp: 'time'}
 
     def parse_file(self, path: Path) -> List[LogEvent]:
         events = []
@@ -340,12 +298,9 @@ class CsvLogParser(LogParser):
 
     def _row_to_event(self, row: dict, source: Path) -> Optional[LogEvent]:
         event = LogEvent(raw=str(row), timestamp=None, source=str(source))
-
-        # Extract timestamp if column defined
         ts_col = self.columns.get('timestamp')
         if ts_col and ts_col in row:
             try:
-                # Try common formats
                 ts_str = row[ts_col]
                 if 'T' in ts_str:
                     event.timestamp = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
@@ -353,13 +308,10 @@ class CsvLogParser(LogParser):
                     event.timestamp = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
             except:
                 pass
-
-        # Extract indicators
         for ioc_type, col_name in self.columns.items():
             if ioc_type in ('ip', 'domain', 'hash', 'url') and col_name in row:
                 value = row[col_name].strip()
                 if value:
-                    # Basic validation
                     if ioc_type == 'ip':
                         try:
                             ipaddress.ip_address(value)
@@ -373,17 +325,13 @@ class CsvLogParser(LogParser):
                         event.indicators[ioc_type].add(value)
                     elif ioc_type == 'hash' and re.match(r'^[a-fA-F0-9]{32,64}$', value):
                         event.indicators[ioc_type].add(value)
-
         if any(event.indicators.values()):
             return event
         return None
 
 # ========================== Correlator ==========================
-
 class Correlator:
-    """Matches IOCs against log events."""
     def __init__(self, indicators: List[Indicator]):
-        # Build lookup tables for efficient matching
         self.indicators_by_type: Dict[str, Dict[str, Indicator]] = defaultdict(dict)
         for ind in indicators:
             self.indicators_by_type[ind.type][ind.value] = ind
@@ -404,9 +352,7 @@ class Correlator:
         return matches
 
 # ========================== Reporter ==========================
-
 class Reporter:
-    """Generates reports from matches."""
     def __init__(self, matches: List[Match]):
         self.matches = matches
 
@@ -415,8 +361,6 @@ class Reporter:
         if not self.matches:
             console.print("[green]No matches found.[/green]")
             return
-
-        # Group by indicator source and type for summary
         table = Table(title="Correlation Matches")
         table.add_column("Indicator", style="cyan")
         table.add_column("Type", style="magenta")
@@ -424,7 +368,6 @@ class Reporter:
         table.add_column("Matched In", style="green")
         table.add_column("Timestamp", style="blue")
         table.add_column("Confidence", style="red")
-
         for match in sorted(self.matches, key=lambda m: m.event.timestamp or datetime.min):
             ts = match.event.timestamp.strftime('%Y-%m-%d %H:%M:%S') if match.event.timestamp else 'N/A'
             table.add_row(
@@ -436,8 +379,6 @@ class Reporter:
                 match.indicator.confidence
             )
         console.print(table)
-
-        # Also print a summary count
         console.print(f"\n[bold]Total Matches: {len(self.matches)}[/bold]")
 
     def csv_report(self, output_file: str):
@@ -455,7 +396,7 @@ class Reporter:
                     match.indicator.confidence,
                     match.event.raw
                 ])
-        logger.info(f"CSV report written to {output_file}")
+        print(f"CSV report written to {output_file}")
 
     def json_report(self, output_file: str):
         output = []
@@ -477,15 +418,17 @@ class Reporter:
             })
         with open(output_file, 'w') as f:
             json.dump(output, f, indent=2)
-        logger.info(f"JSON report written to {output_file}")
+        print(f"JSON report written to {output_file}")
 
-# ========================== Main Application ==========================
-
-class KoreApp:
+# ========================== Kore Engine ==========================
+class KoreEngine:
     def __init__(self, config_file: str):
         self.config = self._load_config(config_file)
         self.feeds = self._init_feeds()
         self.parsers = self._init_parsers()
+        self.indicators = []
+        self.events = []
+        self.matches = []
 
     def _load_config(self, config_file: str) -> dict:
         with open(config_file, 'r') as f:
@@ -498,15 +441,12 @@ class KoreApp:
             'dshield': DShieldFeed,
             'blocklist_de': BlocklistDeFeed,
             'threatfox': ThreatFoxFeed,
-            # Add more feeds here
         }
         for name, cfg in feed_configs.items():
             if cfg.get('enabled', True):
                 cls = feed_classes.get(name)
                 if cls:
                     feeds.append(cls(name, cfg))
-                else:
-                    logger.warning(f"Unknown feed: {name}")
         return feeds
 
     def _init_parsers(self) -> Dict[str, LogParser]:
@@ -521,11 +461,9 @@ class KoreApp:
             cls = parser_classes.get(name)
             if cls:
                 parsers[name] = cls(cfg)
-            else:
-                logger.warning(f"Unknown parser: {name}")
         return parsers
 
-    async def _fetch_all_indicators(self) -> List[Indicator]:
+    async def _fetch_all_indicators(self):
         all_indicators = []
         async with aiohttp.ClientSession() as session:
             tasks = [feed.fetch(session) for feed in self.feeds]
@@ -535,7 +473,6 @@ class KoreApp:
                     logger.error(f"Feed fetch failed: {result}")
                 elif isinstance(result, list):
                     all_indicators.extend(result)
-        # Deduplicate indicators (keep first occurrence)
         seen = set()
         unique = []
         for ind in all_indicators:
@@ -543,22 +480,21 @@ class KoreApp:
             if key not in seen:
                 seen.add(key)
                 unique.append(ind)
+        self.indicators = unique
         return unique
 
-    def _parse_logs(self) -> List[LogEvent]:
+    def _parse_logs(self):
         log_paths = []
         base_path = Path(self.config.get('logs', {}).get('directory', '.'))
         patterns = self.config.get('logs', {}).get('include_patterns', ['*.log'])
         for pattern in patterns:
             log_paths.extend(base_path.glob(pattern))
-
         all_events = []
-        parser_name = self.config.get('logs', {}).get('parser', 'apache')  # default parser
+        parser_name = self.config.get('logs', {}).get('parser', 'apache')
         parser = self.parsers.get(parser_name)
         if not parser:
-            logger.error(f"Parser '{parser_name}' not configured")
+            print(f"Parser '{parser_name}' not configured")
             return []
-
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
             task = progress.add_task("Parsing logs...", total=len(log_paths))
             for path in log_paths:
@@ -566,56 +502,135 @@ class KoreApp:
                     events = parser.parse_file(path)
                     all_events.extend(events)
                 progress.advance(task)
-        logger.info(f"Parsed {len(all_events)} events from {len(log_paths)} files")
+        self.events = all_events
         return all_events
 
-    async def run(self, output_format: str = 'console', output_file: str = None):
-        # Fetch IOCs
-        logger.info("Fetching threat intelligence feeds...")
-        indicators = await self._fetch_all_indicators()
-        logger.info(f"Total unique indicators: {len(indicators)}")
+    def correlate(self):
+        if not self.indicators or not self.events:
+            print("No data to correlate. Fetch feeds and parse logs first.")
+            return []
+        correlator = Correlator(self.indicators)
+        self.matches = correlator.correlate(self.events)
+        return self.matches
 
-        if not indicators:
-            logger.warning("No indicators fetched. Check feed configurations.")
+    def run_fetch(self):
+        print("Fetching threat intelligence feeds...")
+        indicators = asyncio.run(self._fetch_all_indicators())
+        print(f"Fetched {len(indicators)} unique indicators.")
+        return indicators
 
-        # Parse logs
-        logger.info("Parsing log files...")
+    def run_parse(self):
+        print("Parsing log files...")
         events = self._parse_logs()
-        logger.info(f"Total events: {len(events)}")
+        print(f"Parsed {len(events)} log events.")
+        return events
 
-        if not events:
-            logger.warning("No log events parsed. Check log directory and patterns.")
+# ========================== Menu Interface ==========================
+console = Console()
 
-        # Correlate
-        logger.info("Correlating...")
-        correlator = Correlator(indicators)
-        matches = correlator.correlate(events)
-        logger.info(f"Found {len(matches)} matches.")
+def print_banner():
+    banner = r"""
+[bold red]
+╦╔═╦ ╦╔═╗╔╦╗
+╠╩╗║ ║╚═╗ ║ 
+╩ ╩╚═╝╚═╝ ╩ 
+[/bold red][bold green]Threat Intelligence Correlation Engine[/bold green]
+[bold yellow]v1.0 - Menu Edition[/bold yellow]
+"""
+    console.print(banner)
+    console.print("[cyan]Inspired by BLACKGLASS v11.0-APEX[/cyan]\n")
 
-        # Report
-        reporter = Reporter(matches)
-        if output_format == 'console':
-            reporter.console_report()
-        elif output_format == 'csv' and output_file:
-            reporter.csv_report(output_file)
-        elif output_format == 'json' and output_file:
-            reporter.json_report(output_file)
+def print_menu():
+    menu_text = """
+[bold cyan]MAIN MENU[/bold cyan]
+
+[01] Fetch Threat Feeds
+[02] Parse Log Files
+[03] Correlate All Evidence
+[04] View Matches (Console)
+[05] Export Matches to CSV
+[06] Export Matches to JSON
+[07] View Statistics
+[08] Change Config File
+[09] Reload Configuration
+[10] Exit
+
+[bold yellow]Enter your choice (1-10): [/bold yellow]"""
+    console.print(menu_text, end="")
+
+def show_stats(engine):
+    console.print("\n[bold]=== STATISTICS ===[/bold]")
+    console.print(f"Feeds configured: {len(engine.feeds)}")
+    console.print(f"Indicators fetched: {len(engine.indicators)}")
+    console.print(f"Log events parsed: {len(engine.events)}")
+    console.print(f"Matches found: {len(engine.matches)}")
+    input("\nPress Enter to continue...")
+
+def main_menu():
+    print_banner()
+    config_file = "config.yaml"
+    engine = KoreEngine(config_file)
+    while True:
+        print_menu()
+        choice = input().strip()
+        if choice == '1':
+            engine.run_fetch()
+            input("\nPress Enter to continue...")
+        elif choice == '2':
+            engine.run_parse()
+            input("\nPress Enter to continue...")
+        elif choice == '3':
+            matches = engine.correlate()
+            print(f"Correlation complete. Found {len(matches)} matches.")
+            input("\nPress Enter to continue...")
+        elif choice == '4':
+            if not engine.matches:
+                print("No matches to display. Run correlation first.")
+            else:
+                reporter = Reporter(engine.matches)
+                reporter.console_report()
+            input("\nPress Enter to continue...")
+        elif choice == '5':
+            if not engine.matches:
+                print("No matches to export. Run correlation first.")
+            else:
+                filename = input("Enter CSV filename (default: report.csv): ").strip()
+                if not filename:
+                    filename = "report.csv"
+                reporter = Reporter(engine.matches)
+                reporter.csv_report(filename)
+            input("\nPress Enter to continue...")
+        elif choice == '6':
+            if not engine.matches:
+                print("No matches to export. Run correlation first.")
+            else:
+                filename = input("Enter JSON filename (default: report.json): ").strip()
+                if not filename:
+                    filename = "report.json"
+                reporter = Reporter(engine.matches)
+                reporter.json_report(filename)
+            input("\nPress Enter to continue...")
+        elif choice == '7':
+            show_stats(engine)
+        elif choice == '8':
+            new_config = input("Enter new config file path: ").strip()
+            if Path(new_config).exists():
+                config_file = new_config
+                engine = KoreEngine(config_file)
+                print(f"Configuration changed to {config_file}")
+            else:
+                print("File not found.")
+            input("\nPress Enter to continue...")
+        elif choice == '9':
+            engine = KoreEngine(config_file)
+            print("Configuration reloaded.")
+            input("\nPress Enter to continue...")
+        elif choice == '10':
+            console.print("[bold red]Exiting Kore. Goodbye![/bold red]")
+            break
         else:
-            logger.error(f"Unsupported output format or missing output file.")
+            console.print("[bold red]Invalid choice. Please enter a number 1-10.[/bold red]")
+            input("Press Enter to continue...")
 
-def main():
-    parser = argparse.ArgumentParser(description="Kore - Threat Intelligence Correlation Engine")
-    parser.add_argument('-c', '--config', required=True, help='Path to YAML configuration file')
-    parser.add_argument('-o', '--output', choices=['console', 'csv', 'json'], default='console',
-                        help='Output format (default: console)')
-    parser.add_argument('-f', '--file', help='Output file (required for csv/json)')
-    args = parser.parse_args()
-
-    if args.output in ('csv', 'json') and not args.file:
-        parser.error(f"--file is required when output is {args.output}")
-
-    app = KoreApp(args.config)
-    asyncio.run(app.run(output_format=args.output, output_file=args.file))
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    main_menu()
