@@ -3,7 +3,7 @@
 Kore - Interactive CLI Menu Version
 Threat Intelligence Correlation Engine
 
-Inspired by BLACKGLASS v11.0-APEX menu style.
+Author: Phoenix/Minthol
 """
 
 import asyncio
