@@ -1,0 +1,33 @@
+# Kore Configuration
+
+# Threat intelligence feeds
+feeds:
+  dshield:
+    enabled: true          # Fetches top attackers from DShield (no API key needed)
+  blocklist_de:
+    enabled: true          # Fetches malicious IPs from blocklist.de
+  threatfox:
+    enabled: false         # Requires API key – get one from threatfox.abuse.ch
+    api_key: "YOUR_API_KEY"
+    days: 1                # Fetch IOCs from last 1 day
+
+# Log sources
+logs:
+  directory: "/var/logs"   # Base directory to search for logs
+  include_patterns:
+    - "*.log"
+    - "*.json"
+    - "access.log*"
+  parser: "apache"         # Default parser (apache, json, csv)
+
+  # Parser-specific configurations
+  parsers:
+    apache: {}             # No special config for Apache parser
+    json: {}               # No special config for JSON parser
+    csv:
+      delimiter: ","
+      columns:
+        ip: "src_ip"
+        domain: "host"
+        hash: "file_hash"
+        timestamp: "time"
